@@ -335,10 +335,10 @@ html, body,
 # CONEXÃO SQL SERVER
 # =========================================================
 
-SERVER   = r"AD01\BARTENDER"
-DATABASE = "bd_mane_2025"
-USERNAME = "RAFA_BI"
-PASSWORD = "Resmosogato"
+SERVER   = r"{servidor}"
+DATABASE = "{banco}"
+USERNAME = "{usuario}"
+PASSWORD = "{Senha}"
 
 connection_string = (
     f"mssql+pyodbc://{USERNAME}:{PASSWORD}@{SERVER}/{DATABASE}"
@@ -352,34 +352,7 @@ engine = create_engine(connection_string)
 # =========================================================
 
 query = """
-SELECT
-        lojas                       AS LOJA,
-        CAST(dataVenda AS DATE)     AS DATA,
-        codProduto                  AS COD_PRODUTO,
-        descricaoProduto            AS PRODUTO,
-        SUM(quantidade)             AS QUANTIDADE,
-        SUM(valTotal)               AS VALOR,
-        tipoVenda                   AS TIPO_VENDA,
-        'MANÉ'                      AS MARCA
-
-FROM bd_mane_2025.dbo.BD_PRODUTOS_V2
-
-LEFT JOIN bd_mane_2025.dbo.BD_LOJAS_DEGUST
-       ON bd_mane_2025.dbo.BD_LOJAS_DEGUST.id
-        = bd_mane_2025.dbo.BD_PRODUTOS_V2.codLoja
-
-WHERE
-    cancelado    = 'N'
-    AND dataVenda BETWEEN '2023-01-01' AND '2026-04-30'
-    AND quantidade  >= 1
-    AND valUnitario  > 1
-
-GROUP BY
-        lojas,
-        dataVenda,
-        codProduto,
-        descricaoProduto,
-        tipoVenda
+{sua query em sql}
 """
 
 # =========================================================
