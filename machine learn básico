@@ -1,0 +1,751 @@
+# =========================================================
+# FORECAST DE VENDAS - MANÉ
+# Streamlit + Prophet / Holt-Winters ETS
+# =========================================================
+#
+# pip install streamlit pandas pyodbc plotly scikit-learn
+#             statsmodels sqlalchemy prophet
+# =========================================================
+
+import warnings
+warnings.filterwarnings("ignore")
+
+import streamlit as st
+import pandas as pd
+import numpy as np
+import plotly.graph_objects as go
+
+from sqlalchemy import create_engine
+from datetime import datetime
+from dateutil.relativedelta import relativedelta
+
+try:
+    from prophet import Prophet
+    PROPHET_OK = True
+except ImportError:
+    PROPHET_OK = False
+
+from statsmodels.tsa.holtwinters import ExponentialSmoothing
+
+# =========================================================
+# CONFIG PAGE
+# =========================================================
+
+st.set_page_config(
+    page_title="Forecast de Vendas - MANÉ",
+    page_icon="📈",
+    layout="wide"
+)
+
+# =========================================================
+# CSS — Dark Premium + Red Tones
+# =========================================================
+
+st.markdown("""
+<style>
+
+@import url('https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;1,9..40,400&display=swap');
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html, body,
+[data-testid="stAppViewContainer"],
+[data-testid="stApp"] {
+    background-color: #08080f !important;
+    font-family: 'DM Sans', sans-serif;
+    color: #e2e2e8;
+}
+
+[data-testid="stAppViewContainer"] {
+    background:
+        radial-gradient(ellipse 90% 45% at 50% -5%, rgba(185,28,28,0.20) 0%, transparent 65%),
+        radial-gradient(ellipse 50% 35% at 95% 85%, rgba(185,28,28,0.09) 0%, transparent 60%),
+        #08080f !important;
+}
+
+/* ── Sidebar ─────────────────────────────────────────── */
+[data-testid="stSidebar"] {
+    background: #0c0c18 !important;
+    border-right: 1px solid rgba(185,28,28,0.22) !important;
+}
+
+[data-testid="stSidebar"] .block-container {
+    padding-top: 2rem !important;
+}
+
+[data-testid="stSidebar"] h1 {
+    font-family: 'Syne', sans-serif !important;
+    font-size: 0.78rem !important;
+    font-weight: 700 !important;
+    letter-spacing: 0.22em !important;
+    text-transform: uppercase !important;
+    color: #ef4444 !important;
+    padding-bottom: 0.75rem;
+    border-bottom: 1px solid rgba(185,28,28,0.28);
+    margin-bottom: 1.5rem !important;
+}
+
+[data-testid="stSidebar"] label,
+[data-testid="stSidebar"] .stSlider > label {
+    font-family: 'DM Sans', sans-serif !important;
+    font-size: 0.70rem !important;
+    font-weight: 500 !important;
+    letter-spacing: 0.10em !important;
+    text-transform: uppercase !important;
+    color: #777788 !important;
+}
+
+[data-testid="stSidebar"] [data-baseweb="select"] > div {
+    background: #181828 !important;
+    border: 1px solid rgba(185,28,28,0.32) !important;
+    border-radius: 8px !important;
+    color: #e2e2e8 !important;
+    font-family: 'DM Sans', sans-serif !important;
+}
+
+[data-testid="stSidebar"] [data-baseweb="select"] > div:hover {
+    border-color: #ef4444 !important;
+}
+
+/* ── Main content ────────────────────────────────────── */
+.block-container {
+    padding-top: 0 !important;
+    padding-bottom: 3rem !important;
+    max-width: 1380px !important;
+}
+
+/* ── Header / Logo ───────────────────────────────────── */
+.mane-header {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 2.5rem 0 1rem;
+    gap: 0.75rem;
+}
+
+.mane-header img {
+    height: 68px;
+    object-fit: contain;
+    filter: drop-shadow(0 0 28px rgba(239,68,68,0.45));
+}
+
+.mane-subtitle {
+    font-family: 'Syne', sans-serif;
+    font-size: 0.66rem;
+    font-weight: 700;
+    letter-spacing: 0.38em;
+    text-transform: uppercase;
+    color: rgba(239,68,68,0.65);
+}
+
+.mane-divider {
+    width: 100%;
+    height: 1px;
+    background: linear-gradient(90deg,
+        transparent 0%,
+        rgba(185,28,28,0.5) 15%,
+        rgba(239,68,68,0.85) 50%,
+        rgba(185,28,28,0.5) 85%,
+        transparent 100%);
+    margin: 0.25rem 0 2rem;
+}
+
+/* ── KPI Cards ───────────────────────────────────────── */
+.kpi-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 1rem;
+    margin-bottom: 2.25rem;
+}
+
+.kpi-card {
+    background: linear-gradient(145deg, #131322 0%, #181830 100%);
+    border: 1px solid rgba(185,28,28,0.18);
+    border-radius: 16px;
+    padding: 1.5rem 1.6rem 1.4rem;
+    position: relative;
+    overflow: hidden;
+    cursor: default;
+    transition: border-color 0.3s ease, transform 0.25s ease, box-shadow 0.3s ease;
+}
+
+.kpi-card::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 2px;
+    background: linear-gradient(90deg, #7f1d1d, #ef4444, #f87171, #ef4444, #7f1d1d);
+    opacity: 0;
+    transition: opacity 0.3s ease;
+}
+
+.kpi-card::after {
+    content: '';
+    position: absolute;
+    bottom: -30px; right: -30px;
+    width: 100px; height: 100px;
+    border-radius: 50%;
+    background: radial-gradient(circle, rgba(185,28,28,0.07) 0%, transparent 70%);
+    pointer-events: none;
+}
+
+.kpi-card:hover {
+    border-color: rgba(239,68,68,0.45);
+    transform: translateY(-3px);
+    box-shadow: 0 12px 40px rgba(185,28,28,0.2);
+}
+
+.kpi-card:hover::before { opacity: 1; }
+
+.kpi-icon {
+    font-size: 1.4rem;
+    margin-bottom: 0.75rem;
+    display: block;
+}
+
+.kpi-label {
+    font-family: 'DM Sans', sans-serif;
+    font-size: 0.67rem;
+    font-weight: 500;
+    letter-spacing: 0.13em;
+    text-transform: uppercase;
+    color: #555566;
+    margin-bottom: 0.45rem;
+}
+
+.kpi-value {
+    font-family: 'Syne', sans-serif;
+    font-size: 1.6rem;
+    font-weight: 700;
+    color: #f1f1f6;
+    line-height: 1.1;
+}
+
+.kpi-value span {
+    font-size: 0.82rem;
+    font-weight: 400;
+    color: #6b6b80;
+    margin-right: 3px;
+}
+
+/* ── Section headers ─────────────────────────────────── */
+.section-header {
+    font-family: 'Syne', sans-serif;
+    font-size: 0.68rem;
+    font-weight: 700;
+    letter-spacing: 0.22em;
+    text-transform: uppercase;
+    color: #ef4444;
+    margin: 1.75rem 0 1rem;
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+}
+
+.section-header::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: linear-gradient(90deg, rgba(185,28,28,0.45), transparent);
+}
+
+/* ── Chart wrapper ───────────────────────────────────── */
+.chart-wrapper {
+    background: linear-gradient(160deg, #0f0f1e 0%, #0c0c18 100%);
+    border: 1px solid rgba(185,28,28,0.16);
+    border-radius: 18px;
+    padding: 1.25rem 0.5rem 0.25rem;
+    margin-bottom: 0.75rem;
+    box-shadow: 0 4px 40px rgba(0,0,0,0.4);
+}
+
+/* ── Model badge ─────────────────────────────────────── */
+.model-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.55rem;
+    background: rgba(185,28,28,0.1);
+    border: 1px solid rgba(185,28,28,0.28);
+    border-radius: 30px;
+    padding: 0.35rem 1rem;
+    font-family: 'DM Sans', sans-serif;
+    font-size: 0.71rem;
+    font-weight: 500;
+    color: #f87171;
+    margin-bottom: 1.75rem;
+}
+
+.model-badge .dot {
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: #ef4444;
+    display: inline-block;
+    animation: blink 2s infinite;
+}
+
+@keyframes blink {
+    0%, 100% { opacity: 1; }
+    50%       { opacity: 0.2; }
+}
+
+/* ── Dataframe ───────────────────────────────────────── */
+[data-testid="stDataFrame"] {
+    border-radius: 12px !important;
+    border: 1px solid rgba(185,28,28,0.18) !important;
+    overflow: hidden !important;
+}
+
+/* ── Download button ─────────────────────────────────── */
+[data-testid="stDownloadButton"] > button {
+    background: linear-gradient(135deg, #991b1b 0%, #dc2626 60%, #ef4444 100%) !important;
+    color: #fff !important;
+    border: none !important;
+    border-radius: 10px !important;
+    font-family: 'Syne', sans-serif !important;
+    font-size: 0.78rem !important;
+    font-weight: 700 !important;
+    letter-spacing: 0.09em !important;
+    padding: 0.65rem 1.6rem !important;
+    box-shadow: 0 6px 22px rgba(185,28,28,0.38) !important;
+    transition: all 0.22s ease !important;
+}
+
+[data-testid="stDownloadButton"] > button:hover {
+    filter: brightness(1.12) !important;
+    transform: translateY(-2px) !important;
+    box-shadow: 0 10px 28px rgba(185,28,28,0.5) !important;
+}
+
+/* ── Warning ─────────────────────────────────────────── */
+[data-testid="stAlert"] {
+    background: rgba(185,28,28,0.09) !important;
+    border: 1px solid rgba(185,28,28,0.33) !important;
+    border-radius: 10px !important;
+    color: #f87171 !important;
+}
+
+/* hide branding */
+#MainMenu, footer, header { visibility: hidden; }
+
+</style>
+""", unsafe_allow_html=True)
+
+# =========================================================
+# CONEXÃO SQL SERVER
+# =========================================================
+
+SERVER   = r"AD01\BARTENDER"
+DATABASE = "bd_mane_2025"
+USERNAME = "RAFA_BI"
+PASSWORD = "Resmosogato"
+
+connection_string = (
+    f"mssql+pyodbc://{USERNAME}:{PASSWORD}@{SERVER}/{DATABASE}"
+    "?driver=ODBC+Driver+17+for+SQL+Server"
+)
+
+engine = create_engine(connection_string)
+
+# =========================================================
+# QUERY
+# =========================================================
+
+query = """
+SELECT
+        lojas                       AS LOJA,
+        CAST(dataVenda AS DATE)     AS DATA,
+        codProduto                  AS COD_PRODUTO,
+        descricaoProduto            AS PRODUTO,
+        SUM(quantidade)             AS QUANTIDADE,
+        SUM(valTotal)               AS VALOR,
+        tipoVenda                   AS TIPO_VENDA,
+        'MANÉ'                      AS MARCA
+
+FROM bd_mane_2025.dbo.BD_PRODUTOS_V2
+
+LEFT JOIN bd_mane_2025.dbo.BD_LOJAS_DEGUST
+       ON bd_mane_2025.dbo.BD_LOJAS_DEGUST.id
+        = bd_mane_2025.dbo.BD_PRODUTOS_V2.codLoja
+
+WHERE
+    cancelado    = 'N'
+    AND dataVenda BETWEEN '2023-01-01' AND '2026-04-30'
+    AND quantidade  >= 1
+    AND valUnitario  > 1
+
+GROUP BY
+        lojas,
+        dataVenda,
+        codProduto,
+        descricaoProduto,
+        tipoVenda
+"""
+
+# =========================================================
+# LOAD DATA
+# =========================================================
+
+@st.cache_data
+def load_data():
+    df = pd.read_sql(query, engine)
+    return df
+
+df = load_data()
+
+# =========================================================
+# SIDEBAR FILTROS
+# =========================================================
+
+st.sidebar.title("Filtros")
+
+lista_lojas    = sorted(df["LOJA"].dropna().unique())
+lista_produtos = sorted(df["PRODUTO"].dropna().unique())
+
+loja    = st.sidebar.selectbox("Selecione a Loja",    ["TODAS"] + list(lista_lojas))
+produto = st.sidebar.selectbox("Selecione o Produto", ["TODOS"] + list(lista_produtos))
+
+meses_previsao = st.sidebar.slider(
+    "Meses de Previsão", min_value=1, max_value=24, value=12, step=1
+)
+
+intervalo_confianca = st.sidebar.slider(
+    "Intervalo de Confiança (%)", min_value=50, max_value=95, value=80, step=5
+)
+
+# =========================================================
+# FILTROS
+# =========================================================
+
+df_filtrado = df.copy()
+if loja    != "TODAS": df_filtrado = df_filtrado[df_filtrado["LOJA"]    == loja]
+if produto != "TODOS": df_filtrado = df_filtrado[df_filtrado["PRODUTO"] == produto]
+
+# =========================================================
+# AGRUPAMENTO MENSAL
+# =========================================================
+
+df_filtrado["DATA"] = pd.to_datetime(df_filtrado["DATA"])
+_freq = "ME" if pd.__version__ >= "2.2" else "M"
+
+df_mensal = (
+    df_filtrado
+    .groupby(pd.Grouper(key="DATA", freq=_freq))
+    .agg(VALOR=("VALOR", "sum"), QUANTIDADE=("QUANTIDADE", "sum"))
+    .reset_index()
+    .sort_values("DATA")
+)
+
+df_mensal = df_mensal[df_mensal["VALOR"] > 0].reset_index(drop=True)
+
+# =========================================================
+# HEADER — Logo centralizada
+# =========================================================
+
+st.markdown("""
+<div class="mane-header">
+    <img src="https://botecomane.com.br/wp-content/uploads/2024/04/mane-logo.png"
+         alt="Mané">
+    <div class="mane-subtitle">Forecast de Vendas</div>
+</div>
+<div class="mane-divider"></div>
+""", unsafe_allow_html=True)
+
+# =========================================================
+# VERIFICA DADOS
+# =========================================================
+
+if len(df_mensal) < 3:
+    st.warning("Dados insuficientes para projeção (mínimo 3 meses com vendas).")
+    st.stop()
+
+# =========================================================
+# KPI CARDS
+# =========================================================
+
+total_vendas = df_filtrado["VALOR"].sum()
+total_qtd    = df_filtrado["QUANTIDADE"].sum()
+ticket_medio = total_vendas / total_qtd if total_qtd > 0 else 0
+media_mensal = df_mensal["VALOR"].mean()
+
+def fmt_brl(v):
+    return f"{v:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+
+st.markdown(f"""
+<div class="kpi-grid">
+    <div class="kpi-card">
+        <span class="kpi-icon">💰</span>
+        <div class="kpi-label">Faturamento Total</div>
+        <div class="kpi-value"><span>R$</span>{fmt_brl(total_vendas)}</div>
+    </div>
+    <div class="kpi-card">
+        <span class="kpi-icon">📦</span>
+        <div class="kpi-label">Quantidade Vendida</div>
+        <div class="kpi-value">{int(total_qtd):,}</div>
+    </div>
+    <div class="kpi-card">
+        <span class="kpi-icon">🎯</span>
+        <div class="kpi-label">Ticket Médio</div>
+        <div class="kpi-value"><span>R$</span>{fmt_brl(ticket_medio)}</div>
+    </div>
+    <div class="kpi-card">
+        <span class="kpi-icon">📊</span>
+        <div class="kpi-label">Média Mensal</div>
+        <div class="kpi-value"><span>R$</span>{fmt_brl(media_mensal)}</div>
+    </div>
+</div>
+""", unsafe_allow_html=True)
+
+# =========================================================
+# MODELO DE PREVISÃO
+# =========================================================
+
+n = len(df_mensal)
+usar_prophet = PROPHET_OK and n >= 6
+
+ult_data  = df_mensal["DATA"].max()
+datas_fut = [ult_data + relativedelta(months=i) for i in range(1, meses_previsao + 1)]
+
+# ── Prophet ───────────────────────────────────────────────
+if usar_prophet:
+
+    df_prophet      = df_mensal.rename(columns={"DATA": "ds", "VALOR": "y"})[["ds", "y"]]
+    intervalo_width = intervalo_confianca / 100
+
+    modelo = Prophet(
+        interval_width          = intervalo_width,
+        yearly_seasonality      = (n >= 12),
+        weekly_seasonality      = False,
+        daily_seasonality       = False,
+        seasonality_mode        = "multiplicative",
+        changepoint_prior_scale = 0.15,
+    )
+
+    modelo.fit(df_prophet)
+
+    future   = modelo.make_future_dataframe(periods=meses_previsao, freq=_freq)
+    forecast = modelo.predict(future)
+
+    fc_hist = forecast[forecast["ds"].isin(df_prophet["ds"])][["ds","yhat","yhat_lower","yhat_upper"]]
+    fc_fut  = forecast[~forecast["ds"].isin(df_prophet["ds"])][["ds","yhat","yhat_lower","yhat_upper"]]
+
+    hist_datas     = df_mensal["DATA"].tolist()
+    hist_valores   = df_mensal["VALOR"].tolist()
+    fut_datas      = fc_fut["ds"].tolist()
+    fut_central    = fc_fut["yhat"].clip(lower=0).tolist()
+    fut_melhor     = fc_fut["yhat_upper"].clip(lower=0).tolist()
+    fut_pior       = fc_fut["yhat_lower"].clip(lower=0).tolist()
+    fitted_valores = fc_hist["yhat"].clip(lower=0).tolist()
+    modelo_nome    = "Prophet — Tendência + Sazonalidade"
+
+# ── Holt-Winters ETS ──────────────────────────────────────
+else:
+
+    serie = df_mensal.set_index("DATA")["VALOR"].asfreq(_freq)
+
+    if n >= 12:
+        trend, seasonal, seasonal_p = "add", "add", 12
+    elif n >= 6:
+        trend, seasonal, seasonal_p = "add", None, None
+    else:
+        trend, seasonal, seasonal_p = None, None, None
+
+    modelo = ExponentialSmoothing(
+        serie,
+        trend=trend, seasonal=seasonal,
+        seasonal_periods=seasonal_p,
+        initialization_method="estimated",
+    ).fit(optimized=True)
+
+    prev        = modelo.forecast(meses_previsao)
+    fut_central = prev.clip(lower=0).tolist()
+
+    residuos = (serie - modelo.fittedvalues).dropna()
+    std_res  = residuos.std()
+
+    z_map = {50:0.674, 60:0.842, 70:1.036, 80:1.282, 90:1.645, 95:1.960}
+    z_val = z_map.get(intervalo_confianca, 1.282)
+
+    fut_melhor     = [max(0, v + z_val * std_res * np.sqrt(i+1)) for i, v in enumerate(fut_central)]
+    fut_pior       = [max(0, v - z_val * std_res * np.sqrt(i+1)) for i, v in enumerate(fut_central)]
+    hist_datas     = df_mensal["DATA"].tolist()
+    hist_valores   = df_mensal["VALOR"].tolist()
+    fut_datas      = datas_fut
+    fitted_valores = modelo.fittedvalues.clip(lower=0).tolist()
+    modelo_nome    = "Holt-Winters ETS — Suavização Exponencial"
+
+# =========================================================
+# GRÁFICO
+# =========================================================
+
+# Paleta
+C_HIST    = "#f87171"              # red-400
+C_FITTED  = "rgba(248,113,113,0.45)"
+C_PROJ    = "#ef4444"              # red-500
+C_MELHOR  = "#4ade80"              # green-400
+C_PIOR    = "#fb923c"              # orange-400
+C_BANDA   = "rgba(239,68,68,0.06)"
+C_GRID    = "rgba(255,255,255,0.045)"
+C_TICK    = "#44445a"
+
+fig = go.Figure()
+
+# Banda de incerteza
+fig.add_trace(go.Scatter(
+    x         = fut_datas + fut_datas[::-1],
+    y         = fut_melhor + fut_pior[::-1],
+    fill      = "toself",
+    fillcolor = C_BANDA,
+    line      = dict(color="rgba(0,0,0,0)"),
+    hoverinfo = "skip",
+    showlegend = True,
+    name      = f"Banda ±{intervalo_confianca}%",
+))
+
+# Histórico real
+fig.add_trace(go.Scatter(
+    x      = hist_datas,
+    y      = hist_valores,
+    mode   = "lines+markers",
+    name   = "Histórico Real",
+    line   = dict(color=C_HIST, width=2.5, shape="spline", smoothing=0.7),
+    marker = dict(size=7, color=C_HIST, line=dict(color="#08080f", width=2.5)),
+))
+
+# Ajuste do modelo (fitted)
+fig.add_trace(go.Scatter(
+    x    = hist_datas,
+    y    = fitted_valores,
+    mode = "lines",
+    name = "Ajuste do Modelo",
+    line = dict(color=C_FITTED, width=1.5, dash="dot", shape="spline", smoothing=0.7),
+))
+
+# Pior cenário
+fig.add_trace(go.Scatter(
+    x    = fut_datas,
+    y    = fut_pior,
+    mode = "lines",
+    name = "Pior Cenário",
+    line = dict(color=C_PIOR, width=1.8, dash="dash", shape="spline", smoothing=0.6),
+))
+
+# Melhor cenário
+fig.add_trace(go.Scatter(
+    x    = fut_datas,
+    y    = fut_melhor,
+    mode = "lines",
+    name = "Melhor Cenário",
+    line = dict(color=C_MELHOR, width=1.8, dash="dash", shape="spline", smoothing=0.6),
+))
+
+# Projeção central
+fig.add_trace(go.Scatter(
+    x      = fut_datas,
+    y      = fut_central,
+    mode   = "lines+markers",
+    name   = "Projeção Base",
+    line   = dict(color=C_PROJ, width=3, shape="spline", smoothing=0.7),
+    marker = dict(size=8, symbol="diamond", color=C_PROJ, line=dict(color="#08080f", width=2.5)),
+))
+
+# Linha divisória
+fig.add_vline(
+    x                   = ult_data.timestamp() * 1000,
+    line_width          = 1,
+    line_dash           = "dot",
+    line_color          = "rgba(239,68,68,0.35)",
+    annotation_text     = "◀ Histórico  ·  Projeção ▶",
+    annotation_position = "top",
+    annotation_font     = dict(color="rgba(239,68,68,0.6)", size=10.5, family="DM Sans"),
+)
+
+fig.update_layout(
+    paper_bgcolor = "rgba(0,0,0,0)",
+    plot_bgcolor  = "rgba(0,0,0,0)",
+    height        = 520,
+    margin        = dict(l=10, r=20, t=35, b=10),
+    hovermode     = "x unified",
+    hoverlabel    = dict(
+        bgcolor    = "#181830",
+        bordercolor= "#ef4444",
+        font       = dict(family="DM Sans", size=13, color="#f1f1f6"),
+    ),
+    legend = dict(
+        orientation = "h",
+        yanchor     = "bottom",
+        y           = 1.01,
+        xanchor     = "right",
+        x           = 1,
+        font        = dict(family="DM Sans", size=11.5, color="#777788"),
+        bgcolor     = "rgba(0,0,0,0)",
+        borderwidth = 0,
+    ),
+    xaxis = dict(
+        showgrid   = True,
+        gridcolor  = C_GRID,
+        gridwidth  = 1,
+        zeroline   = False,
+        showline   = False,
+        tickformat = "%b %Y",
+        tickfont   = dict(family="DM Sans", size=11, color=C_TICK),
+    ),
+    yaxis = dict(
+        showgrid   = True,
+        gridcolor  = C_GRID,
+        gridwidth  = 1,
+        zeroline   = False,
+        showline   = False,
+        tickprefix = "R$ ",
+        tickformat = ",.0f",
+        tickfont   = dict(family="DM Sans", size=11, color=C_TICK),
+    ),
+    font = dict(family="DM Sans"),
+)
+
+st.markdown('<div class="section-header">Projeção de Vendas</div>', unsafe_allow_html=True)
+st.markdown('<div class="chart-wrapper">', unsafe_allow_html=True)
+st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+st.markdown('</div>', unsafe_allow_html=True)
+
+st.markdown(
+    f'<div class="model-badge"><span class="dot"></span>{modelo_nome}&nbsp;·&nbsp;{n} meses de histórico</div>',
+    unsafe_allow_html=True
+)
+
+# =========================================================
+# TABELA DE PROJEÇÃO
+# =========================================================
+
+st.markdown('<div class="section-header">Tabela de Projeção</div>', unsafe_allow_html=True)
+
+tabela = pd.DataFrame({
+    "MÊS"                 : [d.strftime("%m/%Y") for d in fut_datas],
+    "PIOR CENÁRIO (R$)"   : [f"R$ {fmt_brl(v)}" for v in fut_pior],
+    "PROJEÇÃO BASE (R$)"  : [f"R$ {fmt_brl(v)}" for v in fut_central],
+    "MELHOR CENÁRIO (R$)" : [f"R$ {fmt_brl(v)}" for v in fut_melhor],
+})
+
+st.dataframe(tabela, use_container_width=True, hide_index=True)
+
+# =========================================================
+# DOWNLOAD
+# =========================================================
+
+tabela_csv = pd.DataFrame({
+    "MES"           : [d.strftime("%m/%Y") for d in fut_datas],
+    "PIOR_CENARIO"  : [round(v, 2) for v in fut_pior],
+    "PROJECAO_BASE" : [round(v, 2) for v in fut_central],
+    "MELHOR_CENARIO": [round(v, 2) for v in fut_melhor],
+})
+
+csv = tabela_csv.to_csv(index=False).encode("utf-8")
+
+st.markdown("<br>", unsafe_allow_html=True)
+
+st.download_button(
+    label     = "⬇️  Exportar Projeção CSV",
+    data      = csv,
+    file_name = "projecao_vendas_mane.csv",
+    mime      = "text/csv",
+)
